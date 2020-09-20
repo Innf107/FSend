@@ -54,8 +54,8 @@ data Upload = Upload {
 
 main :: IO ()
 main = do
-    createDirectory "files/"
-    appendFile "state.json" ""
+    (doesDirectoryExist "files") >>= (flip unless $ createDirectory "files/")
+    (doesFileExist "state.json") >>= (flip unless $ writeFile "state.json" "{\"stateUploads\":[]}")
     scotty port mainScotty
 
 
