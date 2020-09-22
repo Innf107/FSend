@@ -30,6 +30,9 @@ import Data.Array
 import Network.Wai.Parse
 import System.Directory
 import Data.String.Utils (replace)
+import Control.Concurrent
+import Encoding.Html.Entities
+import Codec.Compression.Lzma
 
 port = 25565
 
@@ -42,12 +45,11 @@ data ServerState = ServerState {
 newtype ID = ID {unID::String}
     deriving newtype (Show, Eq, Generic, FromJSON, ToJSON)
 
---                                                                                         TODO: might have to be Integer instead
 data Upload = Upload {
         uploadID::ID,
         uploadFileName::String,
         uploadExpirationDate::UTCTime,
-        uploadFileSize::Int,
+        uploadFileSize::Int,--TODO: might have to be Integer instead to be more portable (On 32bit this would only show up correctly until ~2GB ?)
         uploadIsPublic::Bool
     }
     deriving (Show, Eq, Generic, FromJSON, ToJSON)
@@ -56,42 +58,46 @@ main :: IO ()
 main = do
     (doesDirectoryExist "files") >>= (flip unless $ createDirectory "files/")
     (doesFileExist "state.json") >>= (flip unless $ writeFile "state.json" "{\"stateUploads\":[]}")
-    scotty port mainScotty
+    s <- getStateFromFile
+    stateVar <- newMVar s
+    scotty port (mainScotty stateVar)
 
 
-getState :: IO ServerState
-getState = A.decodeFileStrict stateFileName >>= \x -> case x of
+getStateFromFile :: IO ServerState
+getStateFromFile = A.decodeFileStrict stateFileName >>= \x -> case x of
     Nothing -> error "Cannot read state.json!"
     Just x -> return x
 
-putState :: ServerState -> IO ()
-putState s = A.encodeFile stateFileName s
+putState :: MVar ServerState -> ServerState -> IO ()
+putState stateVar s = modifyMVar_ stateVar (const $ return s) >> A.encodeFile stateFileName s
 
-mainScotty :: ScottyM ()
-mainScotty = do
+mainScotty :: MVar ServerState -> ScottyM ()
+mainScotty stateVar = do
     Scotty.get "/" $ do
         file "index.html"
 
     Scotty.get "/public" $ do
-        ServerState{stateUploads} <- liftIO getState
+        ServerState{stateUploads} <- liftIO $ readMVar stateVar
         p <- liftIO $ readFile "public.html"
         f <- liftIO $ readFile "publicEntry.html"
         entries <- liftIO $ unlines <$> mapM (renderUpload f) (filter uploadIsPublic stateUploads)
         html $ T.pack (replace ("{PUBLICENTRIES}") entries p)
 
     Scotty.post "/upload" $ do
-        s@ServerState{stateUploads} <- liftIO getState
+        s@ServerState{stateUploads} <- liftIO $ readMVar stateVar
         FileInfo{fileName, fileContent} <- (snd . (!!0)) <$> Scotty.files
         id <- liftIO $ newID
 
         lt::Int <- param "lifeTime"
         isPublic <- any ((=="public") . fst) <$> params
 
-        --TODO: Allow user to supply length
         t <- liftIO getCurrentTime
+
+        --TODO: validate supplied time
+
         --         seconds
         let t' = addUTCTime (fromIntegral lt) t
-        liftIO $ addUpload Upload
+        liftIO $ addUpload stateVar Upload
             {
                 uploadID=id,
                 uploadFileName=(BU.toString fileName),
@@ -103,35 +109,36 @@ mainScotty = do
 
     Scotty.get "/download/:uploadID" $ do
         queryID <- ID <$> param "uploadID"
-        x <- liftIO $ getUpload queryID
+        x <- liftIO $ getUpload stateVar queryID
         case x of
             Just (Upload {uploadFileName})  -> do
                 setHeader "Content-Disposition" ("attachment; filename=" <> T.pack uploadFileName)
-                file $ "files/" ++ unID queryID
+                content <- liftIO $ fmap decompress $ B.readFile $ "files/" ++ unID queryID  
+                raw content
             Nothing -> page404
 
     Scotty.get "/:uploadID" $ do
         queryID <- ID <$> param "uploadID"
-        u <- liftIO $ getUpload queryID
+        u <- liftIO $ getUpload stateVar queryID
         case u of
             Nothing -> page404
             Just u -> downloadPage u
 
 
-addUpload :: Upload -> ByteString -> IO ()
-addUpload u@(Upload{uploadID}) content = do
-    s@ServerState{stateUploads} <- getState
-    B.writeFile ("files/" ++ unID uploadID) content
-    putState (s{stateUploads=stateUploads++[u]})
+addUpload :: MVar ServerState -> Upload -> ByteString -> IO ()
+addUpload stateVar u@(Upload{uploadID}) content = do
+    s@ServerState{stateUploads} <- readMVar stateVar
+    B.writeFile ("files/" ++ unID uploadID) (compressWith (defaultCompressParams{compressLevel=CompressionLevel9}) content)
+    putState stateVar (s{stateUploads=stateUploads++[u]})
 
 
-getUpload :: ID -> IO (Maybe Upload)
-getUpload queryID = do
-    s@ServerState{stateUploads} <- liftIO getState
+getUpload :: MVar ServerState -> ID -> IO (Maybe Upload)
+getUpload stateVar queryID = do
+    s@ServerState{stateUploads} <- liftIO getStateFromFile
     t <- getCurrentTime
     let (stale, fine) = partition (isStale t) stateUploads
     when (not $ null stale) do
-            putState s{stateUploads=fine}
+            putState stateVar s{stateUploads=fine}
             forM_ stale (\Upload{uploadID} -> removeFile $ "files/" ++ unID uploadID)
     return $ find (\Upload{uploadID} -> uploadID == queryID) stateUploads
 
@@ -154,7 +161,7 @@ downloadPage Upload{..} = do
     t <- liftIO getCurrentTime
     html $ T.pack $ foldr (\(x, y) a -> replace x y a) h
         [("{ID}", unID uploadID),
-        ("{FILENAME}", uploadFileName),
+        ("{FILENAME}", escapeHtmlEntites uploadFileName),
         ("{FILESIZE}", showFileSize uploadFileSize),
         ("{TIMEREMAINING}", showTimeRemaining t uploadExpirationDate),
         ("{VISIBILITY}", if uploadIsPublic then "public" else "private")]
@@ -164,7 +171,7 @@ renderUpload f Upload{..} = do
     t <- getCurrentTime
     return $ foldr (\(x, y) a -> replace x y a) f
         [("{ID}", unID uploadID),
-        ("{FILENAME}", uploadFileName),
+        ("{FILENAME}", escapeHtmlEntites uploadFileName),
         ("{FILESIZE}", showFileSize uploadFileSize),
         ("{TIMEREMAINING}", showTimeRemaining t uploadExpirationDate)]
 

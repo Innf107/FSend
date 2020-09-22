@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: d5f0d1de06a5dd5511fa68f3c90eb1af112e71de0dcde658daa943aee31adcab
+-- hash: 1ea3080fa26129459cf016192e449df71697e11d2c51a46fc46599291c447065
 
 name:           FSend
 version:        0.1.0.0
@@ -27,6 +27,7 @@ source-repository head
 
 library
   exposed-modules:
+      Encoding.Html.Entities
       Lib
   other-modules:
       Paths_FSend
@@ -38,8 +39,10 @@ library
     , array
     , base >=4.7 && <5
     , bytestring
+    , containers
     , directory
     , fused-effects
+    , lzma
     , mtl
     , random
     , scotty
@@ -63,8 +66,10 @@ executable FSend-exe
     , array
     , base >=4.7 && <5
     , bytestring
+    , containers
     , directory
     , fused-effects
+    , lzma
     , mtl
     , random
     , scotty
@@ -89,8 +94,10 @@ test-suite FSend-test
     , array
     , base >=4.7 && <5
     , bytestring
+    , containers
     , directory
     , fused-effects
+    , lzma
     , mtl
     , random
     , scotty

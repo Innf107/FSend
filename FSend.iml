@@ -112,5 +112,6 @@
     <orderEntry type="library" name="hslogger-1.3.1.0" level="project" />
     <orderEntry type="library" name="network-bsd-2.8.1.0" level="project" />
     <orderEntry type="library" name="parsec-3.1.14.0" level="project" />
+    <orderEntry type="library" name="lzma-0.0.0.3" level="project" />
   </component>
 </module>

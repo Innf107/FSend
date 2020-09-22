@@ -34,6 +34,8 @@ dependencies:
 - utf8-string
 - directory
 - MissingH
+- containers
+- lzma
 
 library:
   source-dirs: src
