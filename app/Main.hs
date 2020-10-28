@@ -4,6 +4,7 @@
 {-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE LambdaCase #-}
 module Main where
 
 import Lib
@@ -64,7 +65,7 @@ main = do
 
 
 getStateFromFile :: IO ServerState
-getStateFromFile = A.decodeFileStrict stateFileName >>= \x -> case x of
+getStateFromFile = A.decodeFileStrict stateFileName >>= \case
     Nothing -> error "Cannot read state.json!"
     Just x -> return x
 
@@ -134,7 +135,7 @@ addUpload stateVar u@(Upload{uploadID}) content = do
 
 getUpload :: MVar ServerState -> ID -> IO (Maybe Upload)
 getUpload stateVar queryID = do
-    s@ServerState{stateUploads} <- liftIO getStateFromFile
+    s@ServerState{stateUploads} <- readMVar stateVar
     t <- getCurrentTime
     let (stale, fine) = partition (isStale t) stateUploads
     when (not $ null stale) do

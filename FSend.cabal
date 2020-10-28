@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 1ea3080fa26129459cf016192e449df71697e11d2c51a46fc46599291c447065
+-- hash: d0e4dd097b33bc655893f03946b8469961b08add6508e62dbdabdecc8ab7193f
 
 name:           FSend
 version:        0.1.0.0
@@ -41,7 +41,6 @@ library
     , bytestring
     , containers
     , directory
-    , fused-effects
     , lzma
     , mtl
     , random
@@ -68,7 +67,6 @@ executable FSend-exe
     , bytestring
     , containers
     , directory
-    , fused-effects
     , lzma
     , mtl
     , random
@@ -96,7 +94,6 @@ test-suite FSend-test
     , bytestring
     , containers
     , directory
-    , fused-effects
     , lzma
     , mtl
     , random
