@@ -5,6 +5,7 @@
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE TupleSections #-}
 module Main where
 
 import Lib
@@ -34,8 +35,10 @@ import Data.String.Utils (replace)
 import Control.Concurrent
 import Encoding.Html.Entities
 import Codec.Compression.Lzma
+import Data.Functor ((<&>))
+import GHC.Exts (fromString)
 
-port = 25565
+port = 25566
 
 stateFileName = "state.json"
 
@@ -72,17 +75,28 @@ getStateFromFile = A.decodeFileStrict stateFileName >>= \case
 putState :: MVar ServerState -> ServerState -> IO ()
 putState stateVar s = modifyMVar_ stateVar (const $ return s) >> A.encodeFile stateFileName s
 
+templates :: [(String, FilePath)]
+templates = [("{NAVBAR}", "navbar.html")]
+
 mainScotty :: MVar ServerState -> ScottyM ()
 mainScotty stateVar = do
+    static ["editor.js", "editor.css"]
+
     Scotty.get "/" $ do
-        file "index.html"
+        fileWithTemplates "index.html"
+        
+    Scotty.get "/edit" $ do
+        fileWithTemplates "edit.html"
 
     Scotty.get "/public" $ do
         ServerState{stateUploads} <- liftIO $ readMVar stateVar
         p <- liftIO $ readFile "public.html"
         f <- liftIO $ readFile "publicEntry.html"
         entries <- liftIO $ unlines <$> mapM (renderUpload f) (filter uploadIsPublic stateUploads)
-        html $ T.pack (replace ("{PUBLICENTRIES}") entries p)
+        htmlWithTemplates $ (foldr (\(x, y) a -> replace x y a) p [
+            ("{PUBLICENTRIES}", entries)
+            ])
+
 
     Scotty.post "/upload" $ do
         s@ServerState{stateUploads} <- liftIO $ readMVar stateVar
@@ -126,6 +140,20 @@ mainScotty stateVar = do
             Just u -> downloadPage u
 
 
+static :: [FilePath] -> ScottyM ()
+static = mapM_ (\p -> Scotty.get (fromString ("/" ++ p)) $ file p)
+
+replaceTemplates :: String -> IO String
+replaceTemplates h = do
+    templateContents <- mapM (\(x, y) -> readFile y <&> (x,)) templates
+    return $ foldr (\(x, y) a -> replace x y a) h templateContents
+
+htmlWithTemplates :: String -> ActionM ()
+htmlWithTemplates s = html =<< liftIO (T.pack <$> replaceTemplates s)
+
+fileWithTemplates :: FilePath -> ActionM ()
+fileWithTemplates p = htmlWithTemplates =<< liftIO (readFile p)
+
 addUpload :: MVar ServerState -> Upload -> ByteString -> IO ()
 addUpload stateVar u@(Upload{uploadID}) content = do
     s@ServerState{stateUploads} <- readMVar stateVar
@@ -159,18 +187,20 @@ page404 = file "404.html"
 downloadPage :: Upload -> ActionM ()
 downloadPage Upload{..} = do
     h <- liftIO $ readFile "download.html"
+    videofile <- liftIO $ readFile "video.html"
     t <- liftIO getCurrentTime
-    html $ T.pack $ foldr (\(x, y) a -> replace x y a) h
+    htmlWithTemplates $ foldr (\(x, y) a -> replace x y a) h
         [("{ID}", unID uploadID),
         ("{FILENAME}", escapeHtmlEntites uploadFileName),
         ("{FILESIZE}", showFileSize uploadFileSize),
         ("{TIMEREMAINING}", showTimeRemaining t uploadExpirationDate),
-        ("{VISIBILITY}", if uploadIsPublic then "public" else "private")]
+        ("{VISIBILITY}", if uploadIsPublic then "public" else "private"),
+        ("{VIDEO}", if ".mp4" `isSuffixOf` uploadFileName then replace "{ID}" (unID uploadID) videofile else "")]
 
 renderUpload :: String -> Upload -> IO String
-renderUpload f Upload{..} = do 
+renderUpload f Upload{..} = do
     t <- getCurrentTime
-    return $ foldr (\(x, y) a -> replace x y a) f
+    replaceTemplates $ foldr (\(x, y) a -> replace x y a) f
         [("{ID}", unID uploadID),
         ("{FILENAME}", escapeHtmlEntites uploadFileName),
         ("{FILESIZE}", showFileSize uploadFileSize),

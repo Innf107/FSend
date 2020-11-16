@@ -12,13 +12,7 @@
         <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css" integrity="sha384-JcKb8q3iqJ61gNV9KGb8thSsNjpSL0n8PARn9HuZOnIxN0hoP+VmmDGMN5t9UJ0Z" crossorigin="anonymous">
     </head>
     <body>
-        <div class="navbar navbar-expand-lg navbar-dark" style="background-color: var(--purple);">
-            <a href="/" class="navbar-brand"><b>FSend</b></a>
-            <ul class="navbar-nav mr-auto">
-                <li class="nav-item active"><a href="/" class="nav-link">Upload</a></li>
-                <li class="nav-item"><a href="/public" class="nav-link">Public Uploads</a></li>
-            </ul>
-        </div>
+        {NAVBAR}
         <div class="container">
             <div class="display-1">Upload a file</div>
             <form id="upload" method="POST" action="/upload" enctype="multipart/form-data" onsubmit="onFormSubmit()">
@@ -31,7 +25,7 @@
                     <small class="form-text text-muted">Select a file to upload</small>
                 </div>
                 <div class="form-group">
-                    <label for="duration">Life Time</label>
+                    <label for="lifeTime">Life Time</label>
                     <select class="form-control" id="lifeTime" name="lifeTime" oninput="onFormUpdate()">
                         <option value="300">5min</option>
                         <option value="600">10min</option>

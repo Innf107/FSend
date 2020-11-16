@@ -16,21 +16,16 @@
         <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js" integrity="sha384-B4gt1jrGC7Jh4AgTPSdUtOBvfO8shuf57BaghqFfPlYxofvL8/KUEfYiJOMMV+rV" crossorigin="anonymous"></script>
     </head>
     <body>
-        <div class="navbar navbar-expand-lg navbar-dark" style="background-color: var(--purple);">
-            <a href="/" class="navbar-brand"><b>FSend</b></a>
-            <ul class="navbar-nav mr-auto">
-                <li class="nav-item"><a href="/" class="nav-link">Upload</a></li>
-                <li class="nav-item"><a href="/public" class="nav-link">Public Uploads</a></li>
-            </ul>
-        </div>
+        {NAVBAR}
         <div class="text-center"> 
             <div class="display-2">{FILENAME} <small class="text-muted">({FILESIZE})</small></div>
         </div>
         <div class="container text-center">
-            <div class="display-4">Download: <a style="font-size: 60%" class="btn btn-primary" href="/download/{ID}">{FILENAME}</a></div>
+            <div class="display-4"><span style="text-align: left">Download:</span><br><a style="font-size: 60%" class="btn btn-primary" href="/download/{ID}">{FILENAME}</a></div>
             <h3>Time remaining: <b>{TIMEREMAINING}</b></h3>
             <h3>This upload is <i>{VISIBILITY}</i></h3>
             <h3>ID:{ID}</h3>
+            {VIDEO}
         </div>
     </body>
 </html>
