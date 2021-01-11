@@ -54,6 +54,7 @@ data ServerEnv = ServerEnv {
     , serverTemplatePath :: FilePath
     , serverFileRoot :: FilePath
     , serverStateFilePath :: FilePath
+    , serverStaticFileRoot :: FilePath
     } deriving (Eq)
 
 newtype ServerState = ServerState {

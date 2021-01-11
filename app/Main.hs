@@ -39,6 +39,9 @@ mainServer = do
     Scotty.get "/download/:uploadID" $ downloadEntry =<< param "uploadID"
     Scotty.get "/entry/:uploadID" $ html =<< downloadPage =<< param "uploadID"
 
+    Scotty.get "/static/:staticFileName" $ html =<< staticPage =<< param "staticFileName"
+    Scotty.get "/static/download/:staticFileName" $ downloadStatic =<< param "staticFileName"
+
     Scotty.post "/upload" handleUpload
 
 downloadEntry :: (Server m) => LText -> ActionT LText m ()
@@ -46,7 +49,14 @@ downloadEntry entryID = lookupEntry entryID >>= \case
     Nothing -> html =<< page404
     Just Upload{..} -> do
         setHeader "Content-Disposition" ("attachment; filename=" <> uploadFileName)
-        raw . decompress =<< readFileLBS ("files" </> toString uploadID)
+        raw . decompress =<< readFileLBS =<< (asks serverFileRoot <&> (</> toString uploadID))
+
+downloadStatic :: (Server m) => FilePath -> ActionT LText m ()
+downloadStatic staticFileName = asks serverStaticFileRoot >>= liftIO . doesFileExist . (</> staticFileName) >>= \case
+    False -> html =<< page404
+    True -> do
+        setHeader "Content-Disposition" ("attachment; filename=" <> toLText staticFileName)
+        file =<< (asks serverStaticFileRoot <&> (</> staticFileName))
 
 handleUpload :: (Server m) => ActionT LText m ()
 handleUpload = do
@@ -96,6 +106,7 @@ getServerEnv = ServerEnv
     <*> pure "templates"
     <*> pure "files"
     <*> pure "state.json"
+    <*> pure "static"
 
 
 initialServerState :: (Server m) => m ServerState

@@ -8,6 +8,7 @@ import Data.Time
 import qualified Data.Text.Lazy as LT
 
 import System.FilePath
+import System.Directory
 
 import FSend.Types
 import FSend.Lib
@@ -21,21 +22,29 @@ mkTemplateTransformer name = liftA2 (LT.replace ("{" <> name <> "}"))
 
 -- Templates
 uploadPage :: (Server m) => m LText
-uploadPage = applyNavbar $ readTemplate "upload.html"
+uploadPage = applySimpleTemplates $ readTemplate "upload.html"
 
 publicPage :: (Server m) => m LText
-publicPage = applyNavbar $ applyPublicEntries $ readTemplate "public.html"
+publicPage = applySimpleTemplates $ applyPublicEntries $ readTemplate "public.html"
 
 page404 :: (Server m) => m LText
-page404 = applyNavbar $ readTemplate "404.html"
+page404 = applySimpleTemplates $ readTemplate "404.html"
 
 entry404 :: (Server m) => m LText
-entry404 = applyNavbar $ readTemplate "entry404.html"
+entry404 = applySimpleTemplates $ readTemplate "entry404.html"
+
+static404 :: (Server m) => m LText
+static404 = applySimpleTemplates $ readTemplate "static404.html"
 
 downloadPage :: (Server m) => LText -> m LText
 downloadPage entryID = lookupEntry entryID >>= \case
     Nothing -> entry404
-    Just upload -> applyUpload upload $ applyNavbar $ readTemplate "download.html"
+    Just upload -> applyUpload upload $ applySimpleTemplates $ readTemplate "download.html"
+
+staticPage :: (Server m) => LText -> m LText
+staticPage staticFileName = asks serverStaticFileRoot >>= liftIO . doesFileExist . (</> toString staticFileName) >>= \case
+    False -> static404
+    True -> applyStaticFileSize staticFileName $ applyFileName staticFileName $ applySimpleTemplates $ readTemplate "staticDownload.html"
 
 publicEntry :: (Server m) => Upload -> m LText
 publicEntry u = applyUpload u $ readTemplate "publicEntry.html"
@@ -63,3 +72,20 @@ applyVideo Upload{..}
       || ".mp3" `LT.isSuffixOf` uploadFileName = mkTemplateTransformer "VIDEO" $
                                                       mkTemplateTransformer "ID" (pure uploadID) (readTemplate "video.html")
     | otherwise = mkTemplateTransformer "VIDEO" $ pure ""
+
+applyFileName :: (Server m) => LText -> m LText -> m LText
+applyFileName = mkTemplateTransformer "FILENAME" . pure
+
+applyHeader :: (Server m) => m LText -> m LText
+applyHeader = mkTemplateTransformer "HEADER" $ readTemplate "header.html"
+
+applyStaticFileSize :: (Server m) => LText -> m LText -> m LText
+applyStaticFileSize fp t = do
+    fullPath <- asks serverStaticFileRoot <&> (</> toString fp)
+    fileSize <- liftIO $ getFileSize fullPath
+    mkTemplateTransformer "FILESIZE" (pure $ show fileSize) t
+
+
+applySimpleTemplates :: (Server m) => m LText -> m LText
+applySimpleTemplates start = foldr ($) start [applyNavbar, applyPublicEntries, applyHeader]  
+
