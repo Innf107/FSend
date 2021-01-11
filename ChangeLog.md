@@ -1,3 +1,3 @@
-# Changelog for FSend
+# Changelog for FSend2
 
 ## Unreleased changes
