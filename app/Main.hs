@@ -1,227 +1,128 @@
-{-# LANGUAGE FlexibleInstances, GeneralizedNewtypeDeriving, MultiParamTypeClasses, TypeOperators, RankNTypes
- , OverloadedStrings, ScopedTypeVariables, BlockArguments, DeriveGeneric, DeriveAnyClass#-}
-{-# LANGUAGE DerivingStrategies #-}
-{-# LANGUAGE UndecidableInstances #-}
-{-# LANGUAGE NamedFieldPuns #-}
-{-# LANGUAGE RecordWildCards #-}
-{-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE TupleSections #-}
+{-# LANGUAGE OverloadedStrings, BlockArguments, ScopedTypeVariables #-}
+{-# LANGUAGE LambdaCase, RecordWildCards #-}
 module Main where
 
-import Lib
-import Web.Scotty as Scotty hiding (get, put)
-import qualified Web.Scotty as Scotty (get, put)
-import qualified Web.Scotty.Trans as ST hiding (get, put)
-import qualified Web.Scotty.Trans as ST (get, put)
-import Control.Monad.Trans
-import Data.Text.Lazy (Text)
-import qualified Data.Text.Lazy as T
-import Data.ByteString.Lazy (ByteString)
-import qualified Data.ByteString.Lazy as B
-import qualified Data.ByteString.Lazy.UTF8 as BLU
-import qualified Data.ByteString.UTF8 as BU
-import Control.Monad.State.Strict
-import GHC.Generics (Generic)
-import Data.Aeson as A hiding (Array)
-import Data.Time as Time
-import Data.List as L
-import Text.Printf (printf)
-import Control.Monad
-import System.Random
-import Data.Array
-import Network.Wai.Parse
+import Relude
+import Relude.Extra
+
+import qualified Data.Text.Lazy as LT
+import qualified Data.ByteString.Lazy as LB
+
+import System.FilePath
 import System.Directory
-import Data.String.Utils (replace)
-import Control.Concurrent
-import Encoding.Html.Entities
+
 import Codec.Compression.Lzma
-import Data.Functor ((<&>))
-import GHC.Exts (fromString)
 
-port = 25566
+import Control.Monad
+import Control.Concurrent (forkIO, threadDelay, modifyMVar_)
 
-stateFileName = "state.json"
+import Data.Aeson
+import Data.Time as Time
 
-data ServerState = ServerState {
-    stateUploads::[Upload]
-} deriving (Show, Eq, Generic, FromJSON, ToJSON)
+import Network.Wai.Parse
 
-newtype ID = ID {unID::String}
-    deriving newtype (Show, Eq, Generic, FromJSON, ToJSON)
+import Web.Scotty.Trans hiding (get, put)
+import qualified Web.Scotty.Trans as Scotty
 
-data Upload = Upload {
-        uploadID::ID,
-        uploadFileName::String,
-        uploadExpirationDate::UTCTime,
-        uploadFileSize::Int,--TODO: might have to be Integer instead to be more portable (On 32bit this would only show up correctly until ~2GB ?)
-        uploadIsPublic::Bool
-    }
-    deriving (Show, Eq, Generic, FromJSON, ToJSON)
+import FSend.Types
+import FSend.Template
+import FSend.Lib
 
 main :: IO ()
-main = do
-    (doesDirectoryExist "files") >>= (flip unless $ createDirectory "files/")
-    (doesFileExist "state.json") >>= (flip unless $ writeFile "state.json" "{\"stateUploads\":[]}")
-    s <- getStateFromFile
-    stateVar <- newMVar s
-    scotty port (mainScotty stateVar)
+main = getServerEnv >>= \e -> runServerM e startupCleanup >> scottyT (serverPort e) (runServerM e) mainServer
+
+mainServer :: (Server m) => ScottyT LText m ()
+mainServer = do
+    Scotty.get "/" $ html =<< uploadPage
+    --TODO: Scotty.get "/editor" ...
+    Scotty.get "/public" $ html =<< publicPage
+    Scotty.get "/download/:uploadID" $ downloadEntry =<< param "uploadID"
+    Scotty.get "/entry/:uploadID" $ html =<< downloadPage =<< param "uploadID"
+
+    Scotty.post "/upload" handleUpload
+
+downloadEntry :: (Server m) => LText -> ActionT LText m ()
+downloadEntry entryID = lookupEntry entryID >>= \case
+    Nothing -> html =<< page404
+    Just Upload{..} -> do
+        setHeader "Content-Disposition" ("attachment; filename=" <> uploadFileName)
+        raw . decompress =<< readFileLBS ("files" </> toString uploadID)
+
+handleUpload :: (Server m) => ActionT LText m ()
+handleUpload = do
+    -- lifeTime in Seconds
+    lifeTime :: Int <- Scotty.param "lifeTime"
+    public :: Bool <- maybe False ((`elem`["on", "true"]) . LT.toLower . snd) . find ((=="public") . fst) <$> Scotty.params
+    (_fileKey, uploadedFile) <- files >>= \case
+        [x] -> pure x
+        _ -> raiseStatus (toEnum 400) "Can only upload exactly one file"
+    upload <- saveUpload lifeTime public uploadedFile
+    redirect $ "entry/" <> uploadID upload
 
 
-getStateFromFile :: IO ServerState
-getStateFromFile = A.decodeFileStrict stateFileName >>= \case
-    Nothing -> error "Cannot read state.json!"
-    Just x -> return x
+saveUpload :: (Server m) => Int -> Bool -> FileInfo LByteString -> m Upload
+saveUpload lifeTime public FileInfo{..} = do
+    upload <- Upload
+        <$> (toLText <$> replicateM 30 randomBase64CharIO)
+        <*> pure (decodeUtf8 fileName)
+        <*> timeAfterSeconds lifeTime
+        <*> pure (fromIntegral (LB.length fileContent))
+        <*> pure public
+    asks serverFileRoot >>= \fp -> writeFileLBS (fp </> toString (uploadID upload)) (compress fileContent)
+    modifyS \s -> s{stateUploads=upload : stateUploads s}
 
-putState :: MVar ServerState -> ServerState -> IO ()
-putState stateVar s = modifyMVar_ stateVar (const $ return s) >> A.encodeFile stateFileName s
+    forkRemoveThread lifeTime (uploadID upload)
+    pure upload
 
-templates :: [(String, FilePath)]
-templates = [("{NAVBAR}", "navbar.html")]
-
-mainScotty :: MVar ServerState -> ScottyM ()
-mainScotty stateVar = do
-    static ["editor.js", "editor.css"]
-
-    Scotty.get "/" $ do
-        fileWithTemplates "index.html"
-        
-    Scotty.get "/edit" $ do
-        fileWithTemplates "edit.html"
-
-    Scotty.get "/public" $ do
-        ServerState{stateUploads} <- liftIO $ readMVar stateVar
-        p <- liftIO $ readFile "public.html"
-        f <- liftIO $ readFile "publicEntry.html"
-        entries <- liftIO $ unlines <$> mapM (renderUpload f) (filter uploadIsPublic stateUploads)
-        htmlWithTemplates $ (foldr (\(x, y) a -> replace x y a) p [
-            ("{PUBLICENTRIES}", entries)
-            ])
+forkRemoveThread :: (Server m) => Int -> LText -> m ()
+forkRemoveThread lifeTime entryID = do
+    stateMVar <- asks serverMVar
+    fileRoot <- asks serverFileRoot
+    -- TODO Might have to keep the pid in case entries can be destroyed in other ways
+    void $ liftIO $ forkIO (threadDelay (lifeTime * 10^6) >> removeEntry stateMVar fileRoot entryID)
 
 
-    Scotty.post "/upload" $ do
-        s@ServerState{stateUploads} <- liftIO $ readMVar stateVar
-        FileInfo{fileName, fileContent} <- (snd . (!!0)) <$> Scotty.files
-        id <- liftIO $ newID
+removeEntry :: (MonadIO m) => MVar ServerState -> FilePath -> LText -> m ()
+removeEntry stateMVar fileRoot entryID = liftIO $ do
+    removeFile (fileRoot </> toString entryID)
+    modifyMVar_ stateMVar (\s -> pure $ s{stateUploads = filter ((/=entryID) . uploadID) (stateUploads s)})
 
-        lt::Int <- param "lifeTime"
-        isPublic <- any ((=="public") . fst) <$> params
-
-        t <- liftIO getCurrentTime
-
-        --TODO: validate supplied time
-
-        --         seconds
-        let t' = addUTCTime (fromIntegral lt) t
-        liftIO $ addUpload stateVar Upload
-            {
-                uploadID=id,
-                uploadFileName=(BU.toString fileName),
-                uploadExpirationDate=t',
-                uploadFileSize=BLU.length fileContent,
-                uploadIsPublic=isPublic
-            } fileContent
-        redirect (T.pack $ unID id)
-
-    Scotty.get "/download/:uploadID" $ do
-        queryID <- ID <$> param "uploadID"
-        x <- liftIO $ getUpload stateVar queryID
-        case x of
-            Just (Upload {uploadFileName})  -> do
-                setHeader "Content-Disposition" ("attachment; filename=" <> T.pack uploadFileName)
-                content <- liftIO $ fmap decompress $ B.readFile $ "files/" ++ unID queryID  
-                raw content
-            Nothing -> page404
-
-    Scotty.get "/:uploadID" $ do
-        queryID <- ID <$> param "uploadID"
-        u <- liftIO $ getUpload stateVar queryID
-        case u of
-            Nothing -> page404
-            Just u -> downloadPage u
+-- Must not cause major side effects
+-- (Has to be called multiple times)
+getServerEnv :: (MonadIO m) => m ServerEnv
+getServerEnv = ServerEnv
+    <$> newEmptyMVar
+    <*> pure 25566
+    <*> pure "templates"
+    <*> pure "files"
+    <*> pure "state.json"
 
 
-static :: [FilePath] -> ScottyM ()
-static = mapM_ (\p -> Scotty.get (fromString ("/" ++ p)) $ file p)
-
-replaceTemplates :: String -> IO String
-replaceTemplates h = do
-    templateContents <- mapM (\(x, y) -> readFile y <&> (x,)) templates
-    return $ foldr (\(x, y) a -> replace x y a) h templateContents
-
-htmlWithTemplates :: String -> ActionM ()
-htmlWithTemplates s = html =<< liftIO (T.pack <$> replaceTemplates s)
-
-fileWithTemplates :: FilePath -> ActionM ()
-fileWithTemplates p = htmlWithTemplates =<< liftIO (readFile p)
-
-addUpload :: MVar ServerState -> Upload -> ByteString -> IO ()
-addUpload stateVar u@(Upload{uploadID}) content = do
-    s@ServerState{stateUploads} <- readMVar stateVar
-    B.writeFile ("files/" ++ unID uploadID) (compressWith (defaultCompressParams{compressLevel=CompressionLevel9}) content)
-    putState stateVar (s{stateUploads=stateUploads++[u]})
-
-
-getUpload :: MVar ServerState -> ID -> IO (Maybe Upload)
-getUpload stateVar queryID = do
-    s@ServerState{stateUploads} <- readMVar stateVar
-    t <- getCurrentTime
-    let (stale, fine) = partition (isStale t) stateUploads
-    when (not $ null stale) do
-            putState stateVar s{stateUploads=fine}
-            forM_ stale (\Upload{uploadID} -> removeFile $ "files/" ++ unID uploadID)
-    return $ find (\Upload{uploadID} -> uploadID == queryID) stateUploads
-
-isStale :: UTCTime -> Upload -> Bool
-isStale currentTime = (< currentTime) . uploadExpirationDate
-
-
-newID :: IO ID
-newID = ID . map (alphabet!) <$> (replicateM 30 $ randomRIO (0,63) :: IO [Int])
+initialServerState :: (Server m) => m ServerState
+initialServerState = do
+    spath <- asks serverStateFilePath
+    liftIO (doesFileExist spath) >>= \case
+        False -> returnDefaultServerState
+        True -> liftIO (decodeFileStrict' spath) >>= maybe returnDefaultServerState pure
     where
-        alphabet :: Array Int Char
-        alphabet = array (0,63) $ zip [0..] $ map toEnum $ [65..90] ++ [97..122] ++ [48..57] ++ [45,95]
-
-page404 :: ActionM ()
-page404 = file "404.html"
-
-downloadPage :: Upload -> ActionM ()
-downloadPage Upload{..} = do
-    h <- liftIO $ readFile "download.html"
-    videofile <- liftIO $ readFile "video.html"
-    t <- liftIO getCurrentTime
-    htmlWithTemplates $ foldr (\(x, y) a -> replace x y a) h
-        [("{ID}", unID uploadID),
-        ("{FILENAME}", escapeHtmlEntites uploadFileName),
-        ("{FILESIZE}", showFileSize uploadFileSize),
-        ("{TIMEREMAINING}", showTimeRemaining t uploadExpirationDate),
-        ("{VISIBILITY}", if uploadIsPublic then "public" else "private"),
-        ("{VIDEO}", if ".mp4" `isSuffixOf` uploadFileName then replace "{ID}" (unID uploadID) videofile else "")]
-
-renderUpload :: String -> Upload -> IO String
-renderUpload f Upload{..} = do
-    t <- getCurrentTime
-    replaceTemplates $ foldr (\(x, y) a -> replace x y a) f
-        [("{ID}", unID uploadID),
-        ("{FILENAME}", escapeHtmlEntites uploadFileName),
-        ("{FILESIZE}", showFileSize uploadFileSize),
-        ("{TIMEREMAINING}", showTimeRemaining t uploadExpirationDate)]
+        returnDefaultServerState :: (MonadIO m) => m ServerState
+        returnDefaultServerState = do
+            putStrLn ("Cannot read State file! This might lead to previous entries"
+                <> "not being recognized, but remaining on disk. Make sure your filesRoot directory only contains uploaded files!")
+            defaultServerState
 
 
-showFileSize :: Int -> String
-showFileSize bytes = foldr (\(x, p) a -> if x > 1 then show' x ++ p else a) (show bytes ++ "B") [(gb, "GB"), (mb, "MB"), (kb, "KB")]
-    where
-        kb = (fromIntegral bytes :: Double) / 1000
-        mb = (fromIntegral bytes :: Double) / 1000000
-        gb = (fromIntegral bytes :: Double) / 1000000000
-        show' :: Double -> String
-        show' x = take (length (takeWhile (not . (=='.')) xs) + 4) xs
-            where
-                xs = show x
+defaultServerState :: (MonadIO m) => m ServerState
+defaultServerState = pure $ ServerState {
+      stateUploads = mempty
+    }
 
-showTimeRemaining :: UTCTime -> UTCTime -> String
-showTimeRemaining from to = printf "%dh %dmin %ds" h min s
-    where
-        secs :: Int = ceiling $ nominalDiffTimeToSeconds $ diffUTCTime to from
-        s = secs `rem` 60
-        min = (secs `div` 60) `rem` 60
-        h = (secs `div` 3600)
+
+startupCleanup :: (Server m) => m ()
+startupCleanup = do
+    mvar <- asks serverMVar
+    putMVar mvar =<< initialServerState
+    getsS stateUploads >>= traverse_ \u -> do
+        currentTime <- liftIO getCurrentTime
+        let lifeTime = round $ nominalDiffTimeToSeconds $ diffUTCTime (uploadExpirationDate u) currentTime
+        forkRemoveThread lifeTime (uploadID u)

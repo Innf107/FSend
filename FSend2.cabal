@@ -1,0 +1,101 @@
+cabal-version: 1.12
+
+-- This file has been generated from package.yaml by hpack version 0.34.3.
+--
+-- see: https://github.com/sol/hpack
+
+name:           FSend2
+version:        0.1.0.0
+description:    Please see the README on GitHub at <https://github.com/githubuser/FSend2#readme>
+homepage:       https://github.com/githubuser/FSend2#readme
+bug-reports:    https://github.com/githubuser/FSend2/issues
+author:         Author name here
+maintainer:     example@example.com
+copyright:      2021 Author name here
+license:        BSD3
+license-file:   LICENSE
+build-type:     Simple
+extra-source-files:
+    README.md
+    ChangeLog.md
+
+source-repository head
+  type: git
+  location: https://github.com/githubuser/FSend2
+
+library
+  exposed-modules:
+      FSend.Lib
+      FSend.Template
+      FSend.Types
+  other-modules:
+      Paths_FSend2
+  hs-source-dirs:
+      src
+  build-depends:
+      aeson
+    , base >=4.7 && <5
+    , bytestring
+    , containers
+    , directory
+    , filepath
+    , lzma
+    , random
+    , relude
+    , scotty
+    , text
+    , time
+    , wai
+    , wai-extra
+  default-language: Haskell2010
+
+executable FSend2-exe
+  main-is: Main.hs
+  other-modules:
+      Paths_FSend2
+  hs-source-dirs:
+      app
+  ghc-options: -threaded -rtsopts -with-rtsopts=-N -Wall -Wno-unused-imports -XNoImplicitPrelude
+  build-depends:
+      FSend2
+    , aeson
+    , base >=4.7 && <5
+    , bytestring
+    , containers
+    , directory
+    , filepath
+    , lzma
+    , random
+    , relude
+    , scotty
+    , text
+    , time
+    , wai
+    , wai-extra
+  default-language: Haskell2010
+
+test-suite FSend2-test
+  type: exitcode-stdio-1.0
+  main-is: Spec.hs
+  other-modules:
+      Paths_FSend2
+  hs-source-dirs:
+      test
+  ghc-options: -threaded -rtsopts -with-rtsopts=-N
+  build-depends:
+      FSend2
+    , aeson
+    , base >=4.7 && <5
+    , bytestring
+    , containers
+    , directory
+    , filepath
+    , lzma
+    , random
+    , relude
+    , scotty
+    , text
+    , time
+    , wai
+    , wai-extra
+  default-language: Haskell2010
